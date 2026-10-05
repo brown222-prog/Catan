@@ -1,4 +1,4 @@
-<!doctype html><html><head><title>Island Settlers</title><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;padding:env(safe-area-inset-top,0) 0 env(safe-area-inset-bottom,0)}body{margin:0;font:14px system-ui;background:#fafaf7}img{max-width:100%}[hidden]{display:none!important}</style></head><body>
+<!doctype html><html><head><title>Island Settlers</title><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no"><style>:root{color-scheme:light;padding:env(safe-area-inset-top,0) 0 env(safe-area-inset-bottom,0)}body{margin:0;font:14px system-ui;background:#fafaf7}img{max-width:100%}[hidden]{display:none!important}</style></head><body>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@500;700;800&family=Lilita+One&display=swap">
 <style>
 /* Layout: board on the left, players and log on the right, your hand and actions under the board.
@@ -317,6 +317,28 @@ button.rtile:disabled { opacity: .35; box-shadow: none; }
 .btn.big { min-height: 56px; font-size: 18px; }
 .sheet.menu .soon { text-align: left; }
 
+/* ---------- v2.2: log stays inside its box ---------- */
+.side { overflow: hidden; }
+.players { flex: none; }
+.logbox { overflow: hidden; contain: layout; }
+.logh { margin: 0; font: 800 15px var(--body); flex: none; }
+.logbox #log { flex: 1 1 0; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
+#log li { overflow-wrap: anywhere; }
+@media (min-width: 1000px) and (max-height: 760px) {
+  .pc { padding: 5px 10px; } .pc .sw { width: 28px; height: 28px; } .pc .vp { font-size: 26px; } .players { gap: 5px; }
+}
+@media (max-width: 999px) { .logbox { flex: none; } .logbox #log { flex: none; max-height: 180px; min-height: 60px; } }
+
+/* ---------- v2.3: only the map zooms ---------- */
+html, body { touch-action: pan-x pan-y; -webkit-text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; overscroll-behavior: none; }
+body { -webkit-user-select: none; user-select: none; }
+input, textarea { -webkit-user-select: text; user-select: text; font-size: 16px; }
+#board { touch-action: none; cursor: grab; }
+button, .hit { touch-action: manipulation; }
+.zoomctl { position: absolute; right: 8px; bottom: 8px; display: flex; flex-direction: column; gap: 6px; z-index: 2; }
+.zoomctl button { width: 38px; height: 38px; border-radius: 10px; border: 0; background: var(--paper); box-shadow: var(--shadow); font: 800 20px var(--body); line-height: 1; }
+.zoomctl button:active { transform: translateY(2px); }
+
 </style>
 
 <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
@@ -389,6 +411,7 @@ button.rtile:disabled { opacity: .35; box-shadow: none; }
 
   <main class="stage">
     <svg id="board" viewBox="-570 -500 1140 1000" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Game board"></svg>
+    <div class="zoomctl" aria-label="Map zoom"><button data-zoom="in" aria-label="Zoom in">+</button><button data-zoom="out" aria-label="Zoom out">−</button><button data-zoom="reset" aria-label="Reset zoom">⤢</button></div>
     <div id="caption" class="caption"></div>
     <div id="toast" class="toast" role="alert"></div>
   </main>
@@ -402,7 +425,7 @@ button.rtile:disabled { opacity: .35; box-shadow: none; }
 
   <aside class="side">
     <div class="players" id="players"></div>
-    <details class="logbox" open><summary>Game log</summary><ol id="log"></ol></details>
+    <section class="logbox" aria-label="Game log"><h2 class="logh">Game log</h2><ol id="log"></ol></section>
   </aside>
 </div>
 
@@ -711,12 +734,14 @@ button.rtile:disabled { opacity: .35; box-shadow: none; }
         const cands = landable.filter(function (c) {
           if (owner.has(key(c[0], c[1]))) return false;
           if (specs[i].main && Math.max(Math.abs(c[0]), Math.abs(c[1]), Math.abs(c[0] + c[1])) > 2) return false;
-          let far = true;
+          let far = true, close = owner.size === 0;
           owner.forEach(function (_, k) {
             const p = k.split(',');
-            if (hexDist({ q: c[0], r: c[1] }, { q: +p[0], r: +p[1] }) < 3) far = false;
+            const dd = hexDist({ q: c[0], r: c[1] }, { q: +p[0], r: +p[1] });
+            if (dd < 2) far = false;
+            if (dd <= 3) close = true;
           });
-          return far;
+          return far && close;
         });
         if (!cands.length) { ok = false; break; }
         const c = cands[rint(s, cands.length)];
@@ -808,10 +833,26 @@ button.rtile:disabled { opacity: .35; box-shadow: none; }
     // sea fills the rest of the frame
     const defs = landDefs.map(function (d) { return { q: d.q, r: d.r, terrain: d.terrain, num: d.num }; });
     const landKeys = new Set(landDefs.map(function (d) { return d.q + ',' + d.r; }));
+    // like the printed boards, sea only fills the gaps and a single ring around the islands (no wide empty ocean)
+    const near = function (q, r) {
+      let n = 0;
+      for (let e = 0; e < 6; e++) if (landKeys.has((q + DIRS[e][0]) + ',' + (r + DIRS[e][1]))) n++;
+      return n >= 2;
+    };
+    const seaKeys = new Set();
     for (let r = -sc.radius; r <= sc.radius; r++) for (let q = -sc.radius; q <= sc.radius; q++) {
       if (Math.abs(q + r) > sc.radius || landKeys.has(q + ',' + r)) continue;
-      defs.push({ q: q, r: r, terrain: 'sea', num: 0 });
+      if (near(q, r)) seaKeys.add(q + ',' + r);
     }
+    // fill pockets that would otherwise be holes inside the map
+    for (let pass = 0; pass < 2; pass++) for (let r = -sc.radius; r <= sc.radius; r++) for (let q = -sc.radius; q <= sc.radius; q++) {
+      const k = q + ',' + r;
+      if (Math.abs(q + r) > sc.radius || landKeys.has(k) || seaKeys.has(k)) continue;
+      let n = 0;
+      for (let e = 0; e < 6; e++) { const kk = (q + DIRS[e][0]) + ',' + (r + DIRS[e][1]); if (landKeys.has(kk) || seaKeys.has(kk)) n++; }
+      if (n >= 5) seaKeys.add(k);
+    }
+    seaKeys.forEach(function (k) { const p = k.split(','); defs.push({ q: +p[0], r: +p[1], terrain: 'sea', num: 0 }); });
     const board = buildGeometry(defs);
     placePortsSpread(s, board, sc.ports);
     s.board = board;
@@ -2809,6 +2850,77 @@ button.rtile:disabled { opacity: .35; box-shadow: none; }
     });
     h += '<g id="dyn"></g>';
     svg.innerHTML = h;
+    captureBase();
+  }
+
+  /* ---------- zoom and pan: only the map can zoom; the rest of the page is locked ---------- */
+  const view = { bx: 0, by: 0, bw: 1, bh: 1, k: 1, x: 0, y: 0 };
+  function captureBase() {
+    const v = $('#board').getAttribute('viewBox').split(/\s+/).map(Number);
+    view.bx = v[0]; view.by = v[1]; view.bw = v[2]; view.bh = v[3]; view.k = 1; view.x = v[0]; view.y = v[1];
+  }
+  function applyView() {
+    const w = view.bw / view.k, h = view.bh / view.k;
+    view.x = Math.min(Math.max(view.x, view.bx), view.bx + view.bw - w);
+    view.y = Math.min(Math.max(view.y, view.by), view.by + view.bh - h);
+    $('#board').setAttribute('viewBox', [view.x.toFixed(1), view.y.toFixed(1), w.toFixed(1), h.toFixed(1)].join(' '));
+  }
+  function toSvg(cx, cy) {
+    const r = $('#board').getBoundingClientRect(), v = $('#board').viewBox.baseVal;
+    // preserveAspectRatio meet: uniform scale, content centred
+    const sc = Math.min(r.width / v.width, r.height / v.height), ox = (r.width - v.width * sc) / 2, oy = (r.height - v.height * sc) / 2;
+    return { x: v.x + (cx - r.left - ox) / sc, y: v.y + (cy - r.top - oy) / sc, sc: sc };
+  }
+  function zoomAt(factor, cx, cy) {
+    const nk = Math.min(4, Math.max(1, view.k * factor));
+    if (nk === view.k) return;
+    const p = toSvg(cx, cy), w = view.bw / nk, h = view.bh / nk;
+    const r = $('#board').getBoundingClientRect(), v = $('#board').viewBox.baseVal;
+    const sc0 = Math.min(r.width / v.width, r.height / v.height);
+    const fx = (p.x - v.x) / v.width, fy = (p.y - v.y) / v.height;
+    view.k = nk; view.x = p.x - fx * w; view.y = p.y - fy * h;
+    void sc0; applyView();
+  }
+  function zoomCenter(factor) { const r = $('#board').getBoundingClientRect(); zoomAt(factor, r.left + r.width / 2, r.top + r.height / 2); }
+  function initZoom() {
+    const svg = $('#board'), ptrs = new Map();
+    let last = null, moved = 0;
+    svg.addEventListener('wheel', function (e) {
+      e.preventDefault();
+      zoomAt(Math.exp(-e.deltaY * (e.ctrlKey ? 0.012 : 0.0016)), e.clientX, e.clientY);
+    }, { passive: false });
+    svg.addEventListener('pointerdown', function (e) {
+      ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      moved = 0; last = null;
+    });
+    svg.addEventListener('pointermove', function (e) {
+      const p = ptrs.get(e.pointerId); if (!p) return;
+      const dx = e.clientX - p.x, dy = e.clientY - p.y;
+      if (ptrs.size === 1) {
+        moved += Math.abs(dx) + Math.abs(dy);
+        if (moved > 8 && view.k > 1) {
+          if (!svg.hasPointerCapture(e.pointerId)) { try { svg.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ } }
+          const sc = toSvg(0, 0).sc || 1;
+          view.x -= dx / sc; view.y -= dy / sc; applyView();
+        }
+        if (moved > 8) ui.noClick = true;
+      } else if (ptrs.size === 2) {
+        const other = Array.from(ptrs.entries()).find(function (kv) { return kv[0] !== e.pointerId; })[1];
+        const d0 = Math.hypot(p.x - other.x, p.y - other.y), d1 = Math.hypot(e.clientX - other.x, e.clientY - other.y);
+        ui.noClick = true;
+        if (d0 > 0) zoomAt(d1 / d0, (e.clientX + other.x) / 2, (e.clientY + other.y) / 2);
+        const sc = toSvg(0, 0).sc || 1;
+        view.x -= (dx / 2) / sc; view.y -= (dy / 2) / sc; applyView();
+      }
+      p.x = e.clientX; p.y = e.clientY;
+    });
+    function up(e) { ptrs.delete(e.pointerId); if (!ptrs.size) setTimeout(function () { ui.noClick = false; }, 60); }
+    svg.addEventListener('pointerup', up); svg.addEventListener('pointercancel', up); svg.addEventListener('pointerleave', function (e) { if (!svg.hasPointerCapture(e.pointerId)) up(e); });
+    // nothing outside the map may zoom: block page pinch (iOS gestures) and ctrl+wheel / trackpad pinch
+    ['gesturestart', 'gesturechange', 'gestureend'].forEach(function (n) { document.addEventListener(n, function (e) { e.preventDefault(); }, { passive: false }); });
+    document.addEventListener('wheel', function (e) { if (e.ctrlKey && !e.target.closest('#board')) e.preventDefault(); }, { passive: false });
+    document.addEventListener('touchmove', function (e) { if (e.touches.length > 1 && !e.target.closest('#board')) e.preventDefault(); }, { passive: false });
+    document.addEventListener('dblclick', function (e) { e.preventDefault(); });
   }
 
   /* ---------- board (dynamic layer) ---------- */
@@ -3294,13 +3406,14 @@ button.rtile:disabled { opacity: .35; box-shadow: none; }
         '<h3>Players (' + humans + ')</h3><div class="score">' +
         '<div><span class="dot" style="background:' + PCOL[settings.color].c + '"></span>' + esc(settings.name.trim() || 'Host') + ' <small style="font-weight:600">&nbsp;(you)</small></div>' +
         guests.map(function (g) { return '<div><span class="dot" style="background:#9bd48a"></span>' + esc(g.name || 'Player') + '<small style="font-weight:600">&nbsp;joined</small></div>'; }).join('') +
-        (guests.length ? '' : '<div class="wait"><span>Waiting for friends to join…</span></div>') + '</div>' +
+        (guests.length ? '' : '<div class="wait"><span>No friends yet. They appear here as soon as they join.</span></div>') + '</div>' +
         '<h3>Bots to fill the table</h3><div class="seg">' + [0, 1, 2, 3].map(function (n) { return '<button data-set="mpBots" data-val="' + n + '" class="' + (settings.mpBots === n ? 'on' : '') + '"' + (n > maxBots ? ' disabled' : '') + '>' + n + '</button>'; }).join('') + '</div>' +
         '<p class="hint">' + esc(E.MAPS[curMap()].name) + ' &middot; ' + (E.MODES[settings.mode].name) + ' &middot; ' + total + ' players. <a href="#" data-settings-open>Change map and rules</a></p>' +
-        '<p class="hint">' + (MP.kind === 'claude' ? 'Friends need Contributor access to this page to play. ' : 'Friends connect straight to you, so keep this tab open. ') + 'Everyone can see all hands in the shared data, so play fair.</p>' +
-        '<footer><button class="btn" data-lobby-cancel>Cancel</button><button class="btn go" data-start' + (total >= 2 ? '' : ' disabled') + '>Start game</button></footer>';
+        '<p class="hint">' + (MP.room && MP.room.kinds.indexOf('claude') >= 0 ? 'Inside Claude, friends need Contributor access to this page. ' : '') + 'Keep this tab open while you play. ' + 'Everyone can see all hands in the shared data, so play fair.</p>' +
+        '<footer><button class="btn" data-lobby-cancel>Cancel</button><button class="btn go" data-start' + (total >= 2 ? '' : ' disabled') + '>' + (guests.length ? 'Start game' : 'Start with bots only') + '</button></footer>';
     } else {
-      h += '<p class="sub">Room <b class="mono">' + MP.code + '</b></p><div class="score"><div class="wait"><span>' + esc(MP.status || 'Connecting…') + '</span></div></div>' +
+      h += '<p class="sub">Room <b class="mono">' + MP.code + '</b></p><div class="score"><div class="' + (MP.joined ? 'win' : 'wait') + '"><span>' + esc(MP.status || 'Connecting…') + '</span></div></div>' +
+        (MP.err === 'denied' ? '<p class="hint" style="color:var(--danger)">This page is not allowed to send messages in the room. Ask the host to share the page with you as a Contributor (not Viewer), then try again.</p>' : (MP.slow && !MP.joined ? '<p class="hint">The host has not answered yet. Check the code, and make sure the host is still on the lobby screen with this room open.</p>' : '')) +
         '<footer><button class="btn" data-lobby-cancel>Leave</button></footer>';
     }
     return h + '</div>';
@@ -3434,17 +3547,59 @@ button.rtile:disabled { opacity: .35; box-shadow: none; }
   /* Inside Claude the built-in room is used. Anywhere else (GitHub Pages, a file) players connect
      directly with WebRTC through the PeerJS signalling server. Both look the same to net.js. */
   let lastRoomErr = '';
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  /* One room object that fans out over every transport that connected (Claude room and/or direct WebRTC).
+     Everything net.js sends is safe to receive twice, so players on different transports never get split. */
+  function multiRoom() {
+    const members = [], handlers = [];
+    const api = {
+      name: 'multi', kinds: [],
+      emit: function (t, d) {
+        if (!members.length) return Promise.resolve();
+        return Promise.all(members.map(function (m) { return Promise.resolve(m.emit(t, d)).then(function () { return true; }, function (e) { return e; }); })).then(function (rs) {
+          if (rs.every(function (x) { return x !== true; })) return Promise.reject(rs[0]);
+        });
+      },
+      on: function (t, fn, err) {
+        const h = { t: t, fn: fn, err: err, unsubs: [] };
+        handlers.push(h);
+        members.forEach(function (m) { h.unsubs.push(m.on(t, fn, err)); });
+        return function () { h.unsubs.forEach(function (u) { try { u(); } catch (e) { /* ignore */ } }); handlers.splice(handlers.indexOf(h), 1); };
+      },
+      add: function (m, kind) {
+        members.push(m); api.kinds.push(kind);
+        handlers.forEach(function (h) { h.unsubs.push(m.on(h.t, h.fn, h.err)); });
+      },
+      leave: function () { members.forEach(function (m) { try { m.leave(); } catch (e) { /* ignore */ } }); return Promise.resolve(); },
+      presence: function () { return Promise.resolve(); }, peers: function () { return []; },
+    };
+    return api;
+  }
   async function openRoom(code, role) {
     lastRoomErr = '';
-    const cl = window.claude;
-    if (cl && cl.use) {
-      try {
-        const root = await cl.use('room');
-        if (root && root.join) { const r = await root.join(NET.roomName(code)); r.kind = 'claude'; return r; }
-      } catch (e) { /* fall through to peer-to-peer */ }
-    }
-    if (!window.Peer) { lastRoomErr = 'nopeer'; return null; }
-    try { return await NET.peerRoom(window.Peer, role, code, { peerOpts: window.__peerOpts }); } catch (e) { lastRoomErr = (e && e.type) || 'fail'; return null; }
+    const multi = multiRoom();
+    const viaClaude = (async function () {
+      const cl = window.claude;
+      if (!cl || !cl.use) return false;
+      for (let i = 0; i < 3; i++) {
+        try {
+          const root = await cl.use('room');
+          if (root && root.join) { multi.add(await root.join(NET.roomName(code)), 'claude'); return true; }
+        } catch (e) { /* retry */ }
+        await sleep(700);
+      }
+      return false;
+    })();
+    const viaPeer = (async function () {
+      if (!window.Peer) { lastRoomErr = 'nopeer'; return false; }
+      try { multi.add(await NET.peerRoom(window.Peer, role, code, { peerOpts: window.__peerOpts }), 'peer'); return true; } catch (e) { lastRoomErr = (e && e.type) || 'fail'; return false; }
+    })();
+    const ok = await new Promise(function (res) {
+      let n = 0, got = false;
+      [viaClaude, viaPeer].forEach(function (p) { p.then(function (v) { n++; if (v && !got) { got = true; res(true); } else if (n === 2 && !got) res(false); }); });
+    });
+    if (ok) lastRoomErr = '';
+    return ok ? multi : null;
   }
   function roomFailMsg(role) {
     if (lastRoomErr === 'peer-unavailable') return 'No room with that code. Check the code and that the host is waiting.';
@@ -3471,7 +3626,7 @@ button.rtile:disabled { opacity: .35; box-shadow: none; }
     for (let i = 0; i < 3 && !room && lastRoomErr === 'unavailable-id' && MP === my; i++) { my.code = NET.makeCode(); room = await openRoom(my.code, 'host'); }
     if (MP !== my) return;
     if (!room) { const msg = roomFailMsg('host'); MP = null; ui.modal = 'menu'; renderAll(); toast(msg, true); schedule(); return; }
-    my.room = room; my.kind = room.kind;
+    my.room = room;
     my.net = NET.connect(room, { role: 'host', cid: my.cid, onHello: hostHello, onAction: hostAction, onError: function () { /* transient */ } });
     my.net.keepAlive(4000);
     renderModal();
@@ -3489,8 +3644,19 @@ button.rtile:disabled { opacity: .35; box-shadow: none; }
       renderModal();
       return;
     }
-    if (MP.seats.indexOf(m.cid) >= 1) { MP.net.res(m.cid, 'hello', true, ''); MP.net.resendInit(); pushState(); }
-    else MP.net.res(m.cid, 'hello', false, 'That game has already started');
+    if (MP.seats.indexOf(m.cid) >= 1) { MP.net.res(m.cid, 'hello', true, ''); MP.net.resendInit(); pushState(); return; }
+    // someone who arrives just after Start can still take a bot's seat until the first roll
+    const slot = S.phase === 'setup' ? S.players.findIndex(function (q, ix) { return ix > 0 && q.isBot && MP.seats[ix] === null; }) : -1;
+    if (slot > 0) {
+      const q = S.players[slot];
+      q.isBot = false; q.name = m.name || q.name; MP.seats[slot] = m.cid;
+      MP.init.players[slot] = { name: q.name, color: q.color }; MP.init.seats = MP.seats;
+      mpPersist();
+      MP.net.res(m.cid, 'hello', true, '');
+      MP.net.sendInit(MP.init);
+      toast(q.name + ' joined and took a bot seat');
+      renderAll(); schedule();
+    } else MP.net.res(m.cid, 'hello', false, 'That game has already started');
   }
   function hostAction(m) {
     if (!MP || MP.role !== 'host' || !MP.started || !S) return;
@@ -3544,7 +3710,7 @@ button.rtile:disabled { opacity: .35; box-shadow: none; }
       for (let i = 0; i < 4 && !room && lastRoomErr === 'unavailable-id' && MP === my; i++) { await new Promise(function (r) { setTimeout(r, 4000); }); room = await openRoom(saved.code, 'host'); }
       if (MP !== my) return;
       if (!room) { toast('Could not reopen the room. Playing on your own for now.', true); MP = null; renderAll(); schedule(); return; }
-      my.room = room; my.kind = room.kind;
+      my.room = room;
       my.net = NET.connect(room, { role: 'host', cid: my.cid, onHello: hostHello, onAction: hostAction, onError: function () { /* transient */ } });
       my.net.keepAlive(4000);
       my.net.sendInit(my.init);
@@ -3565,8 +3731,10 @@ button.rtile:disabled { opacity: .35; box-shadow: none; }
     const room = await openRoom(code, 'guest');
     if (MP !== my) return;
     if (!room) { const msg = roomFailMsg('guest'); MP = null; ui.modal = 'menu'; renderAll(); toast(msg, true); schedule(); return; }
-    my.room = room; my.kind = room.kind;
-    my.net = NET.connect(room, { role: 'guest', cid: cid, onInit: guestInit, onState: guestState, onRes: guestRes, onError: function () { /* transient */ } });
+    my.room = room;
+    my.net = NET.connect(room, { role: 'guest', cid: cid, onInit: guestInit, onState: guestState, onRes: guestRes, onError: function (e) {
+      if (MP === my && e && e.code === 'not_permitted' && !my.err) { my.err = 'denied'; renderModal(); }
+    } });
     const hello = function () { if (MP === my && !my.started) { my.net.hello(settings.name.trim() || 'Player'); } };
     hello(); my.helloTimer = setInterval(hello, 2000);
     my.staleTimer = setInterval(function () {
@@ -3575,7 +3743,8 @@ button.rtile:disabled { opacity: .35; box-shadow: none; }
       if (st !== my.stale) { my.stale = st; renderCaption(); }
       if (st) my.net.hello(settings.name.trim() || 'Player');
     }, 3000);
-    my.status = 'Connected. Waiting for the host to start…'; renderModal();
+    my.status = 'Looking for the host…'; renderModal();
+    my.slowTimer = setTimeout(function () { if (MP === my && !my.joined) { my.slow = true; renderModal(); } }, 8000);
     mpPersist();
   }
   function guestInit(obj) {
@@ -3601,7 +3770,7 @@ button.rtile:disabled { opacity: .35; box-shadow: none; }
     if (!MP || MP.role !== 'guest') return;
     if (d.aid === 'hello') {
       if (!d.ok) { const msg = d.error || 'Could not join'; leaveRoom(); toast(msg, true); }
-      else MP.lastRx = Date.now();
+      else { MP.lastRx = Date.now(); if (!MP.joined) { MP.joined = true; MP.err = ''; MP.status = 'You are in! Waiting for the host to start…'; renderModal(); } }
       return;
     }
     if (!d.ok && d.error) toast(d.error, true);
@@ -3615,7 +3784,7 @@ button.rtile:disabled { opacity: .35; box-shadow: none; }
   function leaveRoom() {
     const my = MP;
     if (my) {
-      clearInterval(my.helloTimer); clearInterval(my.staleTimer);
+      clearInterval(my.helloTimer); clearInterval(my.staleTimer); clearTimeout(my.slowTimer);
       try { if (my.net) my.net.close(); } catch (e) { /* ignore */ }
       try { if (my.room && my.room.leave) my.room.leave(); } catch (e) { /* ignore */ }
     }
@@ -3628,6 +3797,7 @@ button.rtile:disabled { opacity: .35; box-shadow: none; }
 
   /* ---------- input ---------- */
   function onBoardClick(e) {
+    if (ui.noClick) return;
     const t = e.target.closest('[data-v],[data-e],[data-h]');
     if (!t || S.current !== ME) return;
     if (t.dataset.h !== undefined) {
@@ -3692,6 +3862,8 @@ button.rtile:disabled { opacity: .35; box-shadow: none; }
   }
 
   function onClick(e) {
+    const zb = e.target.closest('[data-zoom]');
+    if (zb) { const z = zb.dataset.zoom; if (z === 'reset') { view.k = 1; view.x = view.bx; view.y = view.by; applyView(); } else zoomCenter(z === 'in' ? 1.4 : 1 / 1.4); return; }
     const link = e.target.closest('a[data-settings-open]');
     if (link) { e.preventDefault(); ui.modal = 'settings'; renderModal(); return; }
     const t = e.target.closest('button,[data-close]');
@@ -3803,7 +3975,8 @@ button.rtile:disabled { opacity: .35; box-shadow: none; }
   document.addEventListener('input', onInput);
   document.addEventListener('keydown', onKey);
   $('#board').addEventListener('click', onBoardClick);
-  window.IslandSettlers = { get state() { return S; }, get mp() { return MP; }, get me() { return ME; }, newGame: newGame, settings: settings, dispatch: dispatch, ui: ui, hostRoom: hostRoom, joinRoom: joinRoom };
+  initZoom();
+  window.IslandSettlers = { get state() { return S; }, get mp() { return MP; }, get me() { return ME; }, newGame: newGame, settings: settings, dispatch: dispatch, ui: ui, render: renderAll, hostRoom: hostRoom, joinRoom: joinRoom };
 
   const saved = loadGame();
   let savedMp = null;
