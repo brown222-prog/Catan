@@ -339,6 +339,13 @@ button, .hit { touch-action: manipulation; }
 .zoomctl button { width: 38px; height: 38px; border-radius: 10px; border: 0; background: var(--paper); box-shadow: var(--shadow); font: 800 20px var(--body); line-height: 1; }
 .zoomctl button:active { transform: translateY(2px); }
 
+/* v3: official Seafarers scenarios */
+.t-fog .hex-fill { fill: #dfe9ef; stroke: #fff; }
+.t-fog .hex-hi { fill: rgba(255,255,255,.55); }
+.fogq { font: 800 46px 'Lilita One', sans-serif; text-anchor: middle; fill: #8aa0b0; paint-order: stroke; stroke: #fff; stroke-width: 5px; }
+.hex.nobuild .hex-fill { filter: saturate(.55) brightness(1.03); }
+.prize { pointer-events: none; filter: drop-shadow(0 2px 2px rgba(0,0,0,.35)); }
+
 </style>
 
 <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
@@ -490,7 +497,7 @@ button, .hit { touch-action: manipulation; }
     const dq = a.q - b.q, dr = a.r - b.r;
     return Math.max(Math.abs(dq), Math.abs(dr), Math.abs(dq + dr));
   }
-  function isLand(h) { return h.terrain !== 'sea'; }
+  function isLand(h) { return h.terrain !== 'sea' && h.terrain !== 'fog'; }
   function isProducing(h) { return RES.indexOf(h.terrain) >= 0; }
 
   function buildGeometry(defs) {
@@ -498,7 +505,7 @@ button, .hit { touch-action: manipulation; }
     const vmap = new Map(), emap = new Map();
     defs.forEach(function (d, i) {
       const cx = SQ3 * (d.q + d.r / 2), cy = 1.5 * d.r;
-      const h = { id: i, q: d.q, r: d.r, x: cx, y: cy, terrain: d.terrain, num: d.num || 0, verts: [], edges: [], nbr: [], island: -1 };
+      const h = { id: i, q: d.q, r: d.r, x: cx, y: cy, terrain: d.terrain, num: d.num || 0, verts: [], edges: [], nbr: [], island: -1, nb: !!d.nb, fog: !!d.fog, real: d.real || null };
       for (let k = 0; k < 6; k++) {
         const ang = ((60 * k - 30) * Math.PI) / 180;
         const x = cx + Math.cos(ang), y = cy + Math.sin(ang);
@@ -601,7 +608,7 @@ button, .hit { touch-action: manipulation; }
     }
   }
   function placePortsSpread(s, board, count) {
-    const cand = board.edges.filter(function (e) { return e.land === 1; });
+    const cand = board.edges.filter(function (e) { return e.land === 1 && !e.hexes.some(function (id) { return board.hexes[id].fog; }); });
     const mid = function (e) { const a = board.verts[e.a], b = board.verts[e.b]; return [(a.x + b.x) / 2, (a.y + b.y) / 2]; };
     const spec = shuffle(s, ['wood', 'brick', 'sheep', 'wheat', 'ore']);
     const types = spec.slice();
@@ -629,6 +636,7 @@ button, .hit { touch-action: manipulation; }
   }
 
   /* ---------- maps ---------- */
+  // Random generator templates (used by the "Random" Seafarers map).
   const SCENARIOS = {
     hopping: {
       id: 'hopping', name: 'Island Hopping', radius: 5, landRadius: 4, vp: 14, bonus: 2, ports: 9, gold: 0, home: 'main', desert: 'main',
@@ -646,13 +654,102 @@ button, .hit { touch-action: manipulation; }
       desc: 'A mid-sized home island and six tiny islands, four gold fields among them. Lots of sailing. New island: 2 extra points.',
     },
   };
+
+  /* The official Seafarers scenarios: fixed island outlines (axial [q, r] cells), shuffled terrain and numbers.
+     Group flags: main = home island, nb = no building, bare = empty sand, fog = hidden hexes, terr/gold = fixed resources. */
+  function span(cols) { // { q: [r0, r1] } -> cells
+    const out = [];
+    Object.keys(cols).forEach(function (q) { const c = cols[q]; for (let r = c[0]; r <= c[1]; r++) out.push([+q, r]); });
+    return out;
+  }
+  const FOG_LAND_POOL = { wheat: 3, brick: 3, ore: 3, sheep: 4, wood: 4 };
+  const OFFICIAL = {
+    newshores: {
+      id: 'newshores', name: 'Heading for New Shores', vp: 14, bonus: 2, ports: 9, gold: 2, home: 'main', desert: 'main', deserts: 1,
+      desc: 'A big home island and small islands across the water (two with gold). First settlement on each small island: +2 points.',
+      shape: [
+        { main: true, cells: span({ 0: [1, 3], 1: [0, 3], 2: [-1, 3], 3: [-1, 2], 4: [-1, 1] }) },
+        { cells: [[6, -2], [6, -1]] }, { cells: [[0, 5], [1, 5]] }, { cells: [[3, 4], [4, 3], [5, 2], [6, 1], [5, 3]] },
+      ],
+    },
+    fourislands: {
+      id: 'fourislands', name: 'The Four Islands', vp: 13, bonus: 2, ports: 9, gold: 0, home: 'any', desert: 'main', deserts: 0,
+      desc: 'Four islands, no desert. Start on one or two of them; each new island you settle first is worth +2 points.',
+      shape: [
+        { cells: [[0, 1], [0, 2], [1, 0], [1, 1], [1, 2], [2, -1], [2, 0]] },
+        { cells: [[4, -2], [4, -1], [5, -2], [6, -2]] },
+        { cells: [[0, 4], [1, 4], [2, 3], [2, 4]] },
+        { cells: [[3, 1], [4, 1], [4, 2], [5, 0], [5, 1], [5, 2], [6, 0], [6, 1]] },
+      ],
+    },
+    fog: {
+      id: 'fog', name: 'The Fog Islands', vp: 12, bonus: 0, ports: 9, gold: 0, home: 'any', desert: 'main', deserts: 0,
+      landPool: FOG_LAND_POOL, nums: [2, 3, 3, 4, 4, 5, 5, 6, 6, 8, 8, 9, 9, 10, 10, 11, 12],
+      fogPool: { sea: 2, gold: 2, wheat: 2, brick: 2, ore: 2, sheep: 1, wood: 1 }, fogNums: [3, 3, 4, 5, 6, 8, 9, 10, 11, 12],
+      desc: 'Two islands and a bank of fog. Sail next to a fogged hex to reveal it: land gives you a card of its resource, gold lets you pick. Hidden land can hold gold!',
+      shape: [
+        { cells: [[0, 1], [0, 2], [1, 0], [1, 1], [2, -1], [2, 0], [3, -1]] },
+        { cells: [[6, 0], [5, 1], [6, 1], [5, 2], [6, 2], [4, 3], [3, 4], [5, 3], [4, 4], [2, 5]] },
+        { fog: true, cells: [[0, 4], [0, 5], [1, 3], [1, 4], [2, 2], [2, 3], [3, 1], [3, 2], [4, 0], [5, -1], [5, -2], [6, -2]] },
+      ],
+    },
+    tribe: {
+      id: 'tribe', name: 'The Forgotten Tribe', vp: 13, bonus: 0, ports: 6, gold: 2, goldAny: true, home: 'main', desert: 'main', deserts: 3, prizes: { vp: 8, dev: 4 },
+      desc: 'One long home island. The small sandy islands cannot be settled, but their coasts hold gifts: sail a ship onto a marked coast to take a point or a development card.',
+      shape: [
+        { main: true, cells: [[0, 2]].concat(span({ 1: [0, 2], 2: [0, 2], 3: [0, 2], 4: [0, 2], 5: [0, 2], 6: [0, 1] })) },
+        { nb: true, bare: true, cells: [[3, -2], [4, -2]] }, { nb: true, bare: true, cells: [[6, -2], [7, -2], [8, -2]] },
+        { nb: true, bare: true, cells: [[8, 0]] }, { nb: true, bare: true, cells: [[7, 2]] },
+        { nb: true, bare: true, cells: [[0, 4], [1, 4]] }, { nb: true, bare: true, cells: [[3, 4], [4, 4], [5, 4]] },
+      ],
+    },
+    cloth: {
+      id: 'cloth', name: 'Cloth for Catan', vp: 14, bonus: 0, ports: 9, gold: 2, goldAny: true, home: 'main', desert: 'main', deserts: 2,
+      desc: 'Two curved home islands around four tiny village islands that cannot be settled. (The cloth trade itself is not in yet.)',
+      shape: [
+        { main: true, cells: [[1, 2], [2, 1], [3, 0], [3, 1], [4, 0], [5, 0], [6, 0], [7, 0], [6, 1], [7, 1]] },
+        { main: true, cells: [[0, 5], [1, 5], [0, 6], [1, 6], [2, 6], [3, 6], [4, 5], [4, 6], [5, 5], [6, 4]] },
+        { nb: true, cells: [[2, 3]] }, { nb: true, cells: [[4, 2]] }, { nb: true, cells: [[3, 4]] }, { nb: true, cells: [[5, 3]] },
+      ],
+    },
+    pirates: {
+      id: 'pirates', name: 'The Pirate Islands', vp: 12, bonus: 1, ports: 9, gold: 2, goldAny: true, home: 'main', desert: 'main', deserts: 1,
+      desc: 'A big eastern home island and small western islands to reach by sea: +1 point for each new island. (The pirate fleet and fortresses are not in yet.)',
+      shape: [
+        { main: true, cells: [[5, 0], [5, 1], [6, 1], [4, 2], [5, 2], [6, 2], [3, 3], [4, 3], [5, 3], [3, 4], [4, 4], [5, 4], [3, 5], [4, 5], [2, 6], [3, 6]] },
+        { cells: [[1, 0], [2, 0], [0, 1], [-1, 2]] }, { cells: [[-2, 4], [-2, 5], [-2, 6], [-1, 6]] },
+        { cells: [[0, 3]] }, { cells: [[3, 1], [2, 2]] }, { cells: [[1, 4], [1, 5]] },
+      ],
+    },
+    wonders: {
+      id: 'wonders', name: 'The Wonders of Catan', vp: 12, bonus: 1, ports: 9, gold: 2, goldAny: true, home: 'main', desert: 'main', deserts: 3,
+      desc: 'A big northern archipelago with three deserts and two small islands (+1 point each). (Building the wonders is not in yet.)',
+      shape: [
+        { main: true, cells: [[0, 2], [0, 4], [1, 0], [1, 1], [1, 2], [1, 3], [2, 0], [2, 1], [2, 4], [3, 0], [3, 1], [3, 3], [3, 4], [4, 0], [4, 1], [4, 2], [4, 3], [5, -1], [5, 0], [5, 1], [6, -2], [6, 0], [6, 1], [7, -1], [7, 0]] },
+        { cells: [[3, -2], [4, -2]] }, { cells: [[7, 2], [6, 3], [5, 4]] },
+      ],
+    },
+    desert: {
+      id: 'desert', name: 'Through the Desert', vp: 14, bonus: 2, ports: 9, gold: 2, home: 'main', desert: 'main', deserts: 3,
+      desertCells: [[4, -1], [5, -1], [6, -1]],
+      desc: 'A desert belt cuts the big island. The strip beyond it and the small islands are foreign: +2 points for the first settlement in each.',
+      shape: [
+        { main: true, cells: [[0, 2]].concat(span({ 1: [0, 2], 2: [-1, 2], 3: [0, 2], 4: [-1, 2], 5: [-1, 1], 6: [-1, 0] })) },
+        { gold: 1, terr: ['gold', 'ore', 'wheat'], cells: [[4, -2], [5, -2], [6, -2]] },
+        { cells: [[0, 4], [0, 5]] }, { cells: [[2, 4], [2, 5]] }, { cells: [[4, 4], [5, 3], [6, 2]] },
+      ],
+    },
+  };
+  const ALLSC = Object.assign({}, SCENARIOS, OFFICIAL);
   const MAPS = {
     standard: { id: 'standard', mode: 'base', name: 'Random', vp: 10, desc: 'The classic board with terrain and numbers shuffled at random.' },
     balanced: { id: 'balanced', mode: 'base', name: 'Balanced', vp: 10, desc: 'Shuffled, then checked so no resource is starved and no starting spot is overpowered.' },
+    random: { id: 'random', mode: 'seafarers', name: 'Random', vp: 14, desc: 'A freshly generated world: a home island and scattered islands, built by the map generator. Different every game.' },
     hopping: Object.assign({ mode: 'seafarers' }, SCENARIOS.hopping),
     four: Object.assign({ mode: 'seafarers' }, SCENARIOS.four),
     archipelago: Object.assign({ mode: 'seafarers' }, SCENARIOS.archipelago),
   };
+  Object.keys(OFFICIAL).forEach(function (k) { MAPS[k] = Object.assign({ mode: 'seafarers' }, OFFICIAL[k]); });
 
   function terrainPool(s) {
     const t = [];
@@ -778,29 +875,81 @@ button, .hit { touch-action: manipulation; }
   }
 
   function buildSeaBoard(s, opts) {
-    const sc = SCENARIOS[opts.map] || SCENARIOS.hopping;
-    const g = growIslands(s, sc);
-    const mainIdx = Math.max(0, g.specs.findIndex(function (sp) { return sp.main; }));
-    const landDefs = [], byIsland = g.members.map(function () { return []; });
-    g.members.forEach(function (list, i) {
-      list.forEach(function (c) { const d = { q: c[0], r: c[1], terrain: 'wood', num: 0, isl: i }; landDefs.push(d); byIsland[i].push(d); });
+    let sc = ALLSC[opts.map] || SCENARIOS.hopping;
+    if (opts.map === 'random') {
+      const keys = ['hopping', 'four', 'archipelago'];
+      sc = SCENARIOS[keys[rint(s, keys.length)]];
+      s.mapName = 'Random';
+      if (!opts.vpGiven) s.vpToWin = sc.vp;
+    }
+    const fixed = !!sc.shape;
+    let specs, members;
+    if (fixed) {
+      specs = sc.shape.map(function (g) { return { main: !!g.main }; });
+      members = sc.shape.map(function (g) { return g.cells.map(function (c) { return [c[0], c[1]]; }); });
+    } else {
+      const g0 = growIslands(s, sc);
+      specs = g0.specs; members = g0.members;
+    }
+    const grp = function (i) { return fixed ? sc.shape[i] : {}; };
+    const mains = [];
+    specs.forEach(function (sp, i) { if (sp.main) mains.push(i); });
+    if (!mains.length) mains.push(0);
+    const mainIdx = mains[0];
+    const isMain = function (i) { return mains.indexOf(i) >= 0; };
+    const homeIdx = sc.home === 'main' ? mains : [0];
+    const landDefs = [], byIsland = members.map(function () { return []; }), fogCells = [];
+    members.forEach(function (list, i) {
+      list.forEach(function (c) {
+        if (grp(i).fog) { fogCells.push({ q: c[0], r: c[1], isl: i }); return; }
+        const d = { q: c[0], r: c[1], terrain: 'wood', num: 0, isl: i, nb: !!grp(i).nb };
+        if (grp(i).bare) d.terrain = 'desert';
+        landDefs.push(d); byIsland[i].push(d);
+      });
     });
     const countNbr = function (d) { return landDefs.filter(function (o) { return o !== d && hexDist(d, o) === 1; }).length; };
-    // desert on the home island, preferring an inland hex
-    const deIsl = sc.desert === 'main' ? mainIdx : 0;
-    const dCand = byIsland[deIsl].slice().sort(function (a, b) { return countNbr(b) - countNbr(a); });
-    const desert = dCand[rint(s, Math.min(3, dCand.length))];
-    desert.terrain = 'desert';
+    // deserts on the home island(s), preferring inland hexes
+    if (sc.desertCells) {
+      sc.desertCells.forEach(function (c) {
+        const d = landDefs.find(function (x) { return x.q === c[0] && x.r === c[1]; });
+        if (d) d.terrain = 'desert';
+      });
+    } else {
+      const nd = sc.deserts === undefined ? 1 : sc.deserts;
+      for (let k = 0; k < nd; k++) {
+        const pool = landDefs.filter(function (d) {
+          return d.terrain === 'wood' && (sc.desert === 'main' ? isMain(d.isl) : d.isl === 0);
+        });
+        const far = pool.filter(function (d) { return !landDefs.some(function (o) { return o.terrain === 'desert' && !o.nb && hexDist(d, o) <= 1; }); });
+        const dCand = (far.length ? far : pool).slice().sort(function (a, b) { return countNbr(b) - countNbr(a); });
+        if (dCand.length) dCand[rint(s, Math.min(3, dCand.length))].terrain = 'desert';
+      }
+    }
+    // fixed resources for tiny groups (e.g. the strip behind the desert)
+    members.forEach(function (_, i) {
+      const g = grp(i);
+      if (!g.terr) return;
+      const list = shuffle(s, g.terr.slice());
+      byIsland[i].forEach(function (d, j) { if (d.terrain === 'wood') d.terrain = list[j % list.length]; });
+    });
     // gold fields
     const goldPool = [];
-    g.members.forEach(function (_, i) { if (!(sc.home === 'main' && i === mainIdx)) goldPool.push(i); });
+    members.forEach(function (_, i) {
+      const g = grp(i);
+      if (g.fog || g.nb || g.bare || g.terr) return;
+      if (!sc.goldAny && sc.home === 'main' && isMain(i)) return;
+      goldPool.push(i);
+    });
     shuffle(s, goldPool);
-    for (let k = 0; k < sc.gold && goldPool.length; k++) {
-      const i = goldPool[k % goldPool.length];
-      const free = byIsland[i].filter(function (d) { return d.terrain !== 'desert' && d.terrain !== 'gold'; });
-      if (free.length >= 2) free[rint(s, free.length)].terrain = 'gold';
-    }
-    // resources: keep the home island varied so every resource is reachable at the start
+    let goldLeft = sc.gold || 0;
+    const putGold = function (i) {
+      const free = byIsland[i].filter(function (d) { return d.terrain === 'wood'; });
+      if (free.length >= 2) { free[rint(s, free.length)].terrain = 'gold'; return true; }
+      return false;
+    };
+    members.forEach(function (_, i) { if (grp(i).gold) goldLeft -= grp(i).gold; }); // those come from `terr`
+    for (let k = 0; k < goldLeft && goldPool.length; k++) putGold(goldPool[k % goldPool.length]);
+    // resources
     const block = function () {
       const b = [];
       [['wood', 4], ['sheep', 4], ['wheat', 4], ['brick', 3], ['ore', 3]].forEach(function (p) { for (let i = 0; i < p[1]; i++) b.push(p[0]); });
@@ -808,14 +957,21 @@ button, .hit { touch-action: manipulation; }
     };
     const need = landDefs.filter(function (d) { return d.terrain === 'wood'; });
     let pool = [];
-    for (let tries = 0; tries < 60; tries++) {
-      pool = [];
-      while (pool.length < need.length + 18) pool = pool.concat(block());
-      const homeList = byIsland[sc.home === 'main' ? mainIdx : 0].filter(function (d) { return d.terrain === 'wood'; });
-      const first = pool.slice(0, homeList.length);
-      if (RES.every(function (r) { return first.indexOf(r) >= 0; })) break;
+    if (sc.landPool) {
+      Object.keys(sc.landPool).forEach(function (k) { for (let i = 0; i < sc.landPool[k]; i++) pool.push(k); });
+      shuffle(s, pool);
+      while (pool.length < need.length) pool = pool.concat(block());
+    } else {
+      for (let tries = 0; tries < 60; tries++) {
+        pool = [];
+        while (pool.length < need.length + 18) pool = pool.concat(block());
+        const homeList = need.filter(function (d) { return homeIdx.indexOf(d.isl) >= 0; });
+        const first = pool.slice(0, homeList.length);
+        if (RES.every(function (r) { return first.indexOf(r) >= 0; })) break;
+      }
     }
-    const ordered = byIsland[sc.home === 'main' ? mainIdx : 0].concat(landDefs.filter(function (d) { return d.isl !== (sc.home === 'main' ? mainIdx : 0); }));
+    const inHome = function (d) { return homeIdx.indexOf(d.isl) >= 0; };
+    const ordered = landDefs.filter(inHome).concat(landDefs.filter(function (d) { return !inHome(d); }));
     let pi = 0;
     ordered.forEach(function (d) { if (d.terrain === 'wood') d.terrain = pool[pi++]; });
     // number tokens
@@ -823,46 +979,102 @@ button, .hit { touch-action: manipulation; }
     let best = null;
     for (let attempt = 0; attempt < 400; attempt++) {
       let nums = [];
-      while (nums.length < withNum.length) nums = nums.concat(shuffle(s, NUMBERS.slice()));
+      const src = sc.nums && sc.nums.length >= withNum.length ? sc.nums : NUMBERS;
+      while (nums.length < withNum.length) nums = nums.concat(shuffle(s, src.slice()));
       nums = shuffle(s, nums.slice(0, withNum.length));
       withNum.forEach(function (d, i) { d.num = nums[i]; });
       best = nums;
       if (noHotAdjacent(withNum)) break;
     }
     withNum.forEach(function (d, i) { d.num = best[i]; });
-    // sea fills the rest of the frame
-    const defs = landDefs.map(function (d) { return { q: d.q, r: d.r, terrain: d.terrain, num: d.num }; });
-    const landKeys = new Set(landDefs.map(function (d) { return d.q + ',' + d.r; }));
-    // like the printed boards, sea only fills the gaps and a single ring around the islands (no wide empty ocean)
-    const near = function (q, r) {
-      let n = 0;
-      for (let e = 0; e < 6; e++) if (landKeys.has((q + DIRS[e][0]) + ',' + (r + DIRS[e][1]))) n++;
-      return n >= 2;
-    };
-    const seaKeys = new Set();
-    for (let r = -sc.radius; r <= sc.radius; r++) for (let q = -sc.radius; q <= sc.radius; q++) {
-      if (Math.abs(q + r) > sc.radius || landKeys.has(q + ',' + r)) continue;
-      if (near(q, r)) seaKeys.add(q + ',' + r);
+    const defs = landDefs.map(function (d) { return { q: d.q, r: d.r, terrain: d.terrain, num: d.num, nb: d.nb }; });
+    // hidden fog hexes: what lies beneath is decided now, shown when discovered
+    if (fogCells.length) {
+      let ft = [];
+      Object.keys(sc.fogPool).forEach(function (k) { for (let i = 0; i < sc.fogPool[k]; i++) ft.push(k); });
+      shuffle(s, ft);
+      while (ft.length < fogCells.length) ft.push('sea');
+      const fn = shuffle(s, (sc.fogNums || NUMBERS).slice());
+      fogCells.forEach(function (c, i) {
+        const tr = ft[i];
+        defs.push({ q: c.q, r: c.r, terrain: 'fog', num: 0, fog: true, real: { terrain: tr, num: tr === 'sea' || tr === 'desert' ? 0 : (fn.pop() || 8) } });
+      });
     }
-    // fill pockets that would otherwise be holes inside the map
-    for (let pass = 0; pass < 2; pass++) for (let r = -sc.radius; r <= sc.radius; r++) for (let q = -sc.radius; q <= sc.radius; q++) {
-      const k = q + ',' + r;
-      if (Math.abs(q + r) > sc.radius || landKeys.has(k) || seaKeys.has(k)) continue;
+    // sea fills the gaps and a ring around the islands
+    const solid = new Set(defs.map(function (d) { return d.q + ',' + d.r; }));
+    let q0 = 1e9, q1 = -1e9, r0 = 1e9, r1 = -1e9;
+    defs.forEach(function (d) { q0 = Math.min(q0, d.q); q1 = Math.max(q1, d.q); r0 = Math.min(r0, d.r); r1 = Math.max(r1, d.r); });
+    const near = function (q, r, minN) {
       let n = 0;
-      for (let e = 0; e < 6; e++) { const kk = (q + DIRS[e][0]) + ',' + (r + DIRS[e][1]); if (landKeys.has(kk) || seaKeys.has(kk)) n++; }
-      if (n >= 5) seaKeys.add(k);
+      for (let e = 0; e < 6; e++) if (solid.has((q + DIRS[e][0]) + ',' + (r + DIRS[e][1]))) n++;
+      return n >= minN;
+    };
+    const frame = fixed ? 0 : sc.radius;
+    const seaKeys = new Set();
+    for (let r = (fixed ? r0 - 2 : -frame); r <= (fixed ? r1 + 2 : frame); r++) for (let q = (fixed ? q0 - 2 : -frame); q <= (fixed ? q1 + 2 : frame); q++) {
+      if (!fixed && Math.abs(q + r) > frame) continue;
+      if (solid.has(q + ',' + r)) continue;
+      if (near(q, r, fixed ? 1 : 2)) seaKeys.add(q + ',' + r);
+    }
+    if (!fixed) {
+      // fill pockets that would otherwise be holes inside the map
+      for (let pass = 0; pass < 2; pass++) for (let r = -frame; r <= frame; r++) for (let q = -frame; q <= frame; q++) {
+        const k = q + ',' + r;
+        if (Math.abs(q + r) > frame || solid.has(k) || seaKeys.has(k)) continue;
+        let n = 0;
+        for (let e = 0; e < 6; e++) { const kk = (q + DIRS[e][0]) + ',' + (r + DIRS[e][1]); if (solid.has(kk) || seaKeys.has(kk)) n++; }
+        if (n >= 5) seaKeys.add(k);
+      }
     }
     seaKeys.forEach(function (k) { const p = k.split(','); defs.push({ q: +p[0], r: +p[1], terrain: 'sea', num: 0 }); });
     const board = buildGeometry(defs);
+    // islands = the groups of the layout (so a desert belt can split one landmass into areas)
+    const area = new Map();
+    members.forEach(function (list, i) { if (!grp(i).fog) list.forEach(function (c) { area.set(c[0] + ',' + c[1], i); }); });
+    board.islands = members.map(function (_, i) { return { id: i, hexes: [] }; });
+    board.hexes.forEach(function (h) {
+      const a = area.get(h.q + ',' + h.r);
+      h.island = a === undefined ? -1 : a;
+      if (a !== undefined) board.islands[a].hexes.push(h.id);
+    });
+    board.fogIsland = Math.max(0, members.findIndex(function (_, i) { return grp(i).fog; }));
+    board.verts.forEach(function (v) {
+      const lands = v.hexes.map(function (id) { return board.hexes[id]; }).filter(isLand);
+      const pick = lands.find(function (h) { return h.terrain !== 'desert'; }) || lands[0];
+      v.island = pick ? pick.island : -1;
+    });
     placePortsSpread(s, board, sc.ports);
     s.board = board;
-    s.robber = board.hexes.findIndex(function (h) { return h.terrain === 'desert'; });
-    const homeIsland = board.hexes[s.robber].island;
-    s.home = sc.home === 'main' ? [homeIsland] : null;
+    // robber: a desert on solid ground, else the 12 (or the best remaining hex)
+    let rb = board.hexes.findIndex(function (h) { return h.terrain === 'desert' && !h.nb && isMain(h.island); });
+    if (rb < 0) rb = board.hexes.findIndex(function (h) { return h.terrain === 'desert' && !h.nb; });
+    if (rb < 0) rb = board.hexes.findIndex(function (h) { return isLand(h) && h.num === 12; });
+    if (rb < 0) rb = board.hexes.findIndex(function (h) { return isLand(h) && !h.nb; });
+    s.robber = rb;
+    s.home = sc.home === 'main' ? mains.slice() : null;
     s.bonus = sc.bonus;
-    // the pirate starts at sea, away from the home island
-    const homeHexes = board.islands[homeIsland].hexes;
-    const seas = board.hexes.filter(function (h) { return h.terrain === 'sea' && Math.max(Math.abs(h.q), Math.abs(h.r), Math.abs(h.q + h.r)) <= 4; });
+    s.fog = board.hexes.filter(function (h) { return h.fog; }).map(function (h) { return h.id; });
+    s.prizes = {};
+    if (sc.prizes) {
+      const kinds = [];
+      for (let i = 0; i < sc.prizes.vp; i++) kinds.push('vp');
+      for (let i = 0; i < sc.prizes.dev; i++) kinds.push('dev');
+      shuffle(s, kinds);
+      const used = new Set();
+      shuffle(s, board.edges.filter(function (e) {
+        return e.land === 1 && e.hexes.some(function (id) { return board.hexes[id].nb && isLand(board.hexes[id]); });
+      })).forEach(function (e) {
+        if (!kinds.length || used.has(e.a) || used.has(e.b)) return;
+        s.prizes[e.id] = kinds.pop();
+        used.add(e.a); used.add(e.b);
+        board.verts[e.a].adj.forEach(function (n) { used.add(n); });
+        board.verts[e.b].adj.forEach(function (n) { used.add(n); });
+      });
+    }
+    // the pirate starts at sea, away from the home island(s)
+    const homeHexes = [];
+    mains.forEach(function (i) { board.islands[i].hexes.forEach(function (id) { homeHexes.push(id); }); });
+    const seas = board.hexes.filter(function (h) { return h.terrain === 'sea' && (fixed || Math.max(Math.abs(h.q), Math.abs(h.r), Math.abs(h.q + h.r)) <= 4); });
     let spots = seas.filter(function (h) { return !h.nbr.some(function (n) { return homeHexes.indexOf(n) >= 0; }); });
     if (!spots.length) spots = seas;
     s.pirate = spots[rint(s, spots.length)].id;
@@ -870,7 +1082,7 @@ button, .hit { touch-action: manipulation; }
 
   const MODES = {
     base: { id: 'base', name: 'Classic', available: true, maps: ['standard', 'balanced'], buildBoard: buildBaseBoard },
-    seafarers: { id: 'seafarers', name: 'Seafarers', available: true, maps: ['hopping', 'four', 'archipelago'], buildBoard: buildSeaBoard },
+    seafarers: { id: 'seafarers', name: 'Seafarers', available: true, maps: ['newshores', 'fourislands', 'fog', 'tribe', 'cloth', 'pirates', 'wonders', 'desert', 'random'], buildBoard: buildSeaBoard },
   };
 
   /* ---------- state helpers ---------- */
@@ -908,6 +1120,7 @@ button, .hit { touch-action: manipulation; }
     Object.keys(snap).forEach(function (k) { s[k] = snap[k]; });
     s.board = b; s.devDeck = new Array(snap.deckN || 0).fill('?'); s.botMem = {};
     delete s.deckN;
+    syncFog(s);
     return s;
   }
 
@@ -921,11 +1134,11 @@ button, .hit { touch-action: manipulation; }
     const s = {
       v: 2, mode: mode, mapId: mapId, mapName: map.name, seed: seed, rng: seed, vpToWin: opts.vpToWin || map.vp || 10,
       turn: 0, phase: 'setup', current: 0, dice: null, lastRoll: null, devPlayed: false, shipMoved: false,
-      trade: null, pending: null, winner: null, robber: 0, pirate: null, home: null, bonus: 0,
+      trade: null, pending: null, winner: null, robber: 0, pirate: null, home: null, bonus: 0, fog: [], prizes: {},
       longestRoad: { pid: null, len: 0 }, largestArmy: { pid: null, n: 0 },
       occ: {}, roadAt: {}, shipAt: {}, shipTurn: {}, bank: {}, devDeck: [], log: [], setup: null, players: [], board: null, botMem: {},
     };
-    MODES[mode].buildBoard(s, { map: mapId });
+    MODES[mode].buildBoard(s, { map: mapId, vpGiven: !!opts.vpToWin });
     RES.forEach(function (r) { s.bank[r] = BANK_START; });
     DEV_TYPES.forEach(function (t) { for (let i = 0; i < DEV_COUNTS[t]; i++) s.devDeck.push(t); });
     shuffle(s, s.devDeck);
@@ -959,7 +1172,7 @@ button, .hit { touch-action: manipulation; }
   function settlementOk(s, vid, pid, setup) {
     const v = s.board.verts[vid];
     if (s.occ[vid]) return false;
-    if (!v.hexes.some(function (h) { return isLand(s.board.hexes[h]); })) return false;
+    if (!v.hexes.some(function (h) { return isLand(s.board.hexes[h]) && !s.board.hexes[h].nb; })) return false;
     for (let i = 0; i < v.adj.length; i++) if (s.occ[v.adj[i]]) return false;
     if (s.phase === 'setup' && s.home && s.home.indexOf(v.island) < 0) return false;
     if (setup) return true;
@@ -1065,6 +1278,16 @@ button, .hit { touch-action: manipulation; }
   /* Turns "I want these cards" (and optionally "I would give these") into the cheapest bank
      trade the player's ratios allow. Gives are chosen at the best ratio first. */
   function planBankTrade(s, pid, want, give) {
+    const first = planBankTradeOnce(s, pid, want, give);
+    if (first.ok) return first;
+    // the cards ticked with − may not fit the ratio (e.g. 3 mixed cards): fall back to the best deal from the whole hand
+    if (RES.some(function (r) { return ((give || {})[r] || 0) > 0; })) {
+      const auto = planBankTradeOnce(s, pid, want, {});
+      if (auto.ok) return auto;
+    }
+    return first;
+  }
+  function planBankTradeOnce(s, pid, want, give) {
     const p = s.players[pid], rates = bankRates(s, pid);
     want = want || {}; give = give || {};
     let need = 0;
@@ -1087,8 +1310,10 @@ button, .hit { touch-action: manipulation; }
         if (pick === null || rates[r] < rates[pick] || (rates[r] === rates[pick] && p.hand[r] - used[r] > p.hand[pick] - used[pick])) pick = r;
       });
       if (pick === null) {
-        const best = Math.min.apply(null, RES.filter(function (r) { return !((want[r] || 0) > 0); }).map(function (r) { return rates[r]; }));
-        return { ok: false, error: explicit ? 'Those cards are not enough. Your best rate is ' + best + ':1' : 'You need ' + best + ' of one resource to trade with the bank' };
+        const opts = RES.filter(function (r) { return !((want[r] || 0) > 0); });
+        const best = Math.min.apply(null, opts.map(function (r) { return rates[r]; }));
+        const total = best * need;
+        return { ok: false, error: need > 1 ? 'You need ' + best + ' of one resource for each card you want (' + total + ' in all)' : 'You need ' + best + ' of the same resource to trade with the bank' };
       }
       left[pick] -= rates[pick]; used[pick] += rates[pick];
     }
@@ -1266,6 +1491,71 @@ button, .hit { touch-action: manipulation; }
     ev.push({ t: 'steal', from: victim, to: thief, res: res });
   }
 
+  /* ---------- fog (The Fog Islands) and prizes (The Forgotten Tribe) ---------- */
+  function revealHex(board, h) {
+    h.terrain = h.real.terrain; h.num = h.real.num || 0;
+    const fi = board.fogIsland;
+    h.island = fi;
+    if (board.islands[fi]) board.islands[fi].hexes.push(h.id);
+    h.edges.forEach(function (eid) {
+      const e = board.edges[eid];
+      e.land = e.hexes.filter(function (id) { return isLand(board.hexes[id]); }).length;
+    });
+    if (isLand(h)) h.verts.forEach(function (vid) { if (board.verts[vid].island < 0) board.verts[vid].island = fi; });
+  }
+  function syncFog(s) {
+    if (!s.board || !s.fog) return;
+    s.board.hexes.forEach(function (h) {
+      if (h.fog && h.terrain === 'fog' && s.fog.indexOf(h.id) < 0) revealHex(s.board, h);
+    });
+  }
+  function discover(s, p, eid, ev) {
+    if (!s.fog || !s.fog.length) return;
+    const e = s.board.edges[eid], hit = [];
+    [e.a, e.b].forEach(function (vid) {
+      s.board.verts[vid].hexes.forEach(function (hid) { if (s.fog.indexOf(hid) >= 0 && hit.indexOf(hid) < 0) hit.push(hid); });
+    });
+    hit.forEach(function (hid) {
+      s.fog.splice(s.fog.indexOf(hid), 1);
+      const h = s.board.hexes[hid];
+      revealHex(s.board, h);
+      ev.push({ t: 'discover', hex: hid, terrain: h.terrain, num: h.num });
+      if (!isLand(h)) { say(s, p.id, 'sails into the fog and finds open sea'); return; }
+      if (h.terrain === 'gold') {
+        say(s, p.id, 'discovers a gold field (' + h.num + ')!');
+        if (bankTotal(s) > 0) {
+          if (!s.pending) { const need = {}; need[p.id] = 1; s.pending = { type: 'gold', need: need }; }
+          else {
+            const have = RES.filter(function (r) { return s.bank[r] > 0; });
+            if (have.length) { const r = have[rint(s, have.length)]; p.hand[r]++; s.bank[r]--; }
+          }
+        }
+        return;
+      }
+      say(s, p.id, 'discovers ' + h.terrain + ' (' + h.num + ') and gets a card');
+      if (isProducing(h) && s.bank[h.terrain] > 0) {
+        p.hand[h.terrain]++; s.bank[h.terrain]--;
+        const g = emptyHand(); g[h.terrain] = 1;
+        ev.push({ t: 'gain', pid: p.id, cards: g, why: 'discover' });
+      }
+    });
+  }
+  function claimPrize(s, p, eid, ev) {
+    if (!s.prizes || !s.prizes[eid]) return;
+    const k = s.prizes[eid];
+    delete s.prizes[eid];
+    if (k === 'vp') {
+      p.svp = (p.svp || 0) + 1;
+      say(s, p.id, 'collects a victory point from the Forgotten Tribe');
+      ev.push({ t: 'island', pid: p.id, pts: 1 });
+    } else if (s.devDeck.length) {
+      const card = s.devDeck.pop();
+      p.devNew[card]++;
+      say(s, p.id, 'receives a development card from the Forgotten Tribe');
+      ev.push({ t: 'dev', pid: p.id, card: card });
+    }
+  }
+
   function afterSettle(s, p, vid, ev, setup) {
     if (s.mode !== 'seafarers') return;
     const isl = s.board.verts[vid].island;
@@ -1348,6 +1638,8 @@ button, .hit { touch-action: manipulation; }
       s.roadAt[eid] = pid; list.push(eid);
       if (kind === 'ship') { s.shipAt[eid] = true; s.shipTurn[eid] = s.turn; }
       ev.push({ t: 'built', pid: pid, kind: kind, id: eid });
+      discover(s, p, eid, ev);
+      if (kind === 'ship') claimPrize(s, p, eid, ev);
       return null;
     }
 
@@ -1383,6 +1675,8 @@ button, .hit { touch-action: manipulation; }
         s.roadAt[a.edge] = pid; (kind === 'ship' ? p.ships : p.roads).push(a.edge);
         if (kind === 'ship') { s.shipAt[a.edge] = true; s.shipTurn[a.edge] = 0; }
         ev.push({ t: 'built', pid: pid, kind: kind, id: a.edge });
+        discover(s, p, a.edge, ev);
+        if (kind === 'ship') claimPrize(s, p, a.edge, ev);
         st.idx++; st.step = 'settlement'; st.last = null;
         if (st.idx >= st.order.length) {
           s.phase = 'roll'; s.current = st.order[0]; s.turn = 1;
@@ -1401,7 +1695,7 @@ button, .hit { touch-action: manipulation; }
         const h = s.board.hexes[a.hex];
         let victims = [];
         if (t === 'move_robber') {
-          if (!h || !isLand(h) || a.hex === s.robber) return fail('Pick a different hex');
+          if (!h || !isLand(h) || h.nb || a.hex === s.robber) return fail('Pick a different hex');
           s.robber = a.hex;
           ev.push({ t: 'robber', hex: a.hex });
           h.verts.forEach(function (vid) {
@@ -1411,7 +1705,7 @@ button, .hit { touch-action: manipulation; }
           say(s, pid, 'moves the robber');
         } else {
           if (s.mode !== 'seafarers') return fail('There is no pirate in this game');
-          if (!h || isLand(h) || a.hex === s.pirate) return fail('Pick a different sea hex');
+          if (!h || isLand(h) || h.terrain === 'fog' || a.hex === s.pirate) return fail('Pick a different sea hex');
           s.pirate = a.hex;
           ev.push({ t: 'pirate', hex: a.hex });
           h.edges.forEach(function (eid) {
@@ -1594,6 +1888,8 @@ button, .hit { touch-action: manipulation; }
         s.shipMoved = true;
         say(s, pid, 'moves a ship');
         ev.push({ t: 'shipmove', pid: pid, from: a.from, to: a.to });
+        discover(s, p, a.to, ev);
+        claimPrize(s, p, a.to, ev);
         updateAwards(s, ev);
         checkWin(s);
         return done();
@@ -2146,6 +2442,15 @@ button, .hit { touch-action: manipulation; }
       if (s.bonus) sc += s.bonus * L.P.islandW;
       pot[v.id] = sc; any = true;
     });
+    // fog hexes to uncover and Forgotten Tribe gifts to collect
+    const iw = L.P.islandW || 1;
+    (s.fog || []).forEach(function (hid) {
+      B.hexes[hid].verts.forEach(function (vid) { const w = iw * 0.7; if (pot[vid] < w) { pot[vid] = w; any = true; } });
+    });
+    Object.keys(s.prizes || {}).forEach(function (eid) {
+      const e = B.edges[eid], w = iw * (s.prizes[eid] === 'vp' ? 1.2 : 0.8);
+      [e.a, e.b].forEach(function (vid) { if (pot[vid] < w) { pot[vid] = w; any = true; } });
+    });
     if (!any) return null;
     const own = function (eid) { return s.roadAt[eid] === pid && s.shipAt[eid]; };
     for (let pass = 0; pass < 9; pass++) {
@@ -2497,7 +2802,7 @@ button, .hit { touch-action: manipulation; }
   }
   function seaHexes(s) { return s.board.hexes.filter(function (h) { return h.terrain === 'sea' && h.id !== s.pirate; }); }
   function robberAction(s, pid) {
-    const L = lvl(s, pid), hexes = s.board.hexes.filter(function (h) { return E.isLand(h) && h.id !== s.robber; });
+    const L = lvl(s, pid), hexes = s.board.hexes.filter(function (h) { return E.isLand(h) && !h.nb && h.id !== s.robber; });
     if (s.mode === 'seafarers' && !L.smart && E.rnd(s) < 0.3) {
       const seas = seaHexes(s);
       return { type: 'move_pirate', pid: pid, hex: seas[E.rint(s, seas.length)].id };
@@ -2649,7 +2954,7 @@ button, .hit { touch-action: manipulation; }
         return { type: 'discard', pid: pid, cards: out };
       }
       case 'robber': {
-        const h = s.board.hexes.find(function (x) { return E.isLand(x) && x.id !== s.robber; });
+        const h = s.board.hexes.find(function (x) { return E.isLand(x) && !x.nb && x.id !== s.robber; });
         return { type: 'move_robber', pid: pid, hex: h.id };
       }
       case 'steal': return { type: 'steal', pid: pid, victim: s.pending.victims[0] };
@@ -2810,6 +3115,36 @@ button, .hit { touch-action: manipulation; }
       return pt(h.x + (v.x - h.x) * k, h.y + (v.y - h.y) * k);
     }).join(' ');
   }
+  function hexSvg(hx) {
+    const cx = hx.x * K, cy = hx.y * K;
+    let h = '<g class="hex t-' + hx.terrain + (hx.nb ? ' nobuild' : '') + '"><polygon class="hex-fill" points="' + hexPoly(hx, 0.97) + '"/><polygon class="hex-hi" points="' + hexPoly(hx, 0.86) + '"/>';
+    if (hx.terrain === 'desert') {
+      h += '<use href="#i-desert" x="' + (cx - 38) + '" y="' + (cy - 40) + '" width="76" height="76"/>';
+    } else {
+      h += '<use href="#i-' + hx.terrain + '" x="' + (cx - 33) + '" y="' + (cy - 62) + '" width="66" height="66"/>';
+      const hot = hx.num === 6 || hx.num === 8 ? ' hot6' : '', ty = cy + 28, n = E.PIPS[hx.num];
+      h += '<circle class="token" cx="' + cx + '" cy="' + ty + '" r="28"/><text class="tnum' + hot + '" x="' + cx + '" y="' + (ty + 4) + '">' + hx.num + '</text>';
+      for (let i = 0; i < n; i++) h += '<circle class="tpip' + hot + '" cx="' + (cx + (i - (n - 1) / 2) * 6.2) + '" cy="' + (ty + 16) + '" r="2.3"/>';
+    }
+    return h + '</g>';
+  }
+  /* fog hexes: a misty "?" until a ship or road reaches them, then the real hex flips in */
+  function fogKey() { return S && S.fog ? S.fog.join(',') : ''; }
+  function renderFog() {
+    const g = $('#fogl');
+    if (!g) return;
+    let h = '';
+    board.hexes.forEach(function (hx) {
+      if (!hx.fog) return;
+      if (hx.terrain === 'fog') {
+        const cx = hx.x * K, cy = hx.y * K;
+        h += '<g class="hex t-fog"><polygon class="hex-fill" points="' + hexPoly(hx, 0.97) + '"/><polygon class="hex-hi" points="' + hexPoly(hx, 0.86) + '"/><text class="fogq" x="' + cx + '" y="' + (cy + 18) + '">?</text></g>';
+      } else if (hx.terrain === 'sea') h += '<polygon class="sea-hex" points="' + hexPoly(hx, 1) + '"/>';
+      else h += hexSvg(hx);
+    });
+    g.innerHTML = h;
+    ui.fogKey = fogKey();
+  }
   function buildBoard() {
     const svg = $('#board');
     let h = '';
@@ -2828,20 +3163,8 @@ button, .hit { touch-action: manipulation; }
       h += '<line class="port-line" x1="' + p.x * K + '" y1="' + p.y * K + '" x2="' + a.x * K + '" y2="' + a.y * K + '"/>';
       h += '<line class="port-line" x1="' + p.x * K + '" y1="' + p.y * K + '" x2="' + b.x * K + '" y2="' + b.y * K + '"/>';
     });
-    board.hexes.forEach(function (hx) {
-      if (hx.terrain === 'sea') return;
-      const cx = hx.x * K, cy = hx.y * K;
-      h += '<g class="hex t-' + hx.terrain + '"><polygon class="hex-fill" points="' + hexPoly(hx, 0.97) + '"/><polygon class="hex-hi" points="' + hexPoly(hx, 0.86) + '"/>';
-      if (hx.terrain === 'desert') {
-        h += '<use href="#i-desert" x="' + (cx - 38) + '" y="' + (cy - 40) + '" width="76" height="76"/>';
-      } else {
-        h += '<use href="#i-' + hx.terrain + '" x="' + (cx - 33) + '" y="' + (cy - 62) + '" width="66" height="66"/>';
-        const hot = hx.num === 6 || hx.num === 8 ? ' hot6' : '', ty = cy + 28, n = E.PIPS[hx.num];
-        h += '<circle class="token" cx="' + cx + '" cy="' + ty + '" r="28"/><text class="tnum' + hot + '" x="' + cx + '" y="' + (ty + 4) + '">' + hx.num + '</text>';
-        for (let i = 0; i < n; i++) h += '<circle class="tpip' + hot + '" cx="' + (cx + (i - (n - 1) / 2) * 6.2) + '" cy="' + (ty + 16) + '" r="2.3"/>';
-      }
-      h += '</g>';
-    });
+    board.hexes.forEach(function (hx) { if (hx.terrain !== 'sea' && !hx.fog) h += hexSvg(hx); });
+    h += '<g id="fogl"></g>';
     board.ports.forEach(function (p) {
       const x = p.x * K, y = p.y * K;
       h += '<circle class="port-dot pd-' + p.type + '" cx="' + x + '" cy="' + y + '" r="36"/>';
@@ -2850,6 +3173,7 @@ button, .hit { touch-action: manipulation; }
     });
     h += '<g id="dyn"></g>';
     svg.innerHTML = h;
+    renderFog();
     captureBase();
   }
 
@@ -2938,7 +3262,7 @@ button, .hit { touch-action: manipulation; }
     const pd = S.pending;
     if (pd) {
       if (pd.type === 'robber') {
-        out.h = board.hexes.filter(function (x) { return E.isLand(x) ? x.id !== S.robber : (sea() && x.id !== S.pirate); }).map(function (x) { return x.id; });
+        out.h = board.hexes.filter(function (x) { return E.isLand(x) ? (!x.nb && x.id !== S.robber) : (sea() && x.terrain === 'sea' && x.id !== S.pirate); }).map(function (x) { return x.id; });
       }
       if (pd.type === 'roadbuilding') { if (kindNow() === 'ship') out.es = E.legalShips(S, ME); else out.e = E.legalRoads(S, ME); }
       return out;
@@ -2989,6 +3313,12 @@ button, .hit { touch-action: manipulation; }
       if (o.city) d = [[-27, 17], [-27, -9], [-14, -25], [-1, -9], [27, -9], [27, 17]];
       else d = [[-18, 15], [-18, -4], [0, -22], [18, -4], [18, 15]];
       h += '<polygon class="piece' + key('b' + (o.city ? 'c' : 's'), vid) + '" points="' + d.map(function (q) { return (x + q[0]) + ',' + (y + q[1] - 2); }).join(' ') + '" fill="' + c.c + '" stroke="' + c.d + '"/>';
+    });
+    Object.keys(S.prizes || {}).forEach(function (eid) {
+      const e = board.edges[eid], a = board.verts[e.a], b = board.verts[e.b], mx = (a.x + b.x) / 2 * K, my = (a.y + b.y) / 2 * K;
+      h += S.prizes[eid] === 'vp'
+        ? '<g class="prize" transform="translate(' + mx.toFixed(1) + ',' + my.toFixed(1) + ')"><circle r="17" fill="#ffc42e" stroke="#8a5a00" stroke-width="4"/><text y="7" text-anchor="middle" font-size="22" font-weight="800" fill="#8a5a00" font-family="sans-serif">1</text></g>'
+        : '<g class="prize" transform="translate(' + mx.toFixed(1) + ',' + my.toFixed(1) + ')"><rect x="-12" y="-17" width="24" height="34" rx="4" fill="#7a4fd1" stroke="#12263a" stroke-width="3.5"/><path d="M0 -8 L4 0 L12 1 L6 7 L8 14 L0 10 L-8 14 L-6 7 L-12 1 L-4 0 Z" fill="#ffc42e" transform="scale(.55)"/></g>';
     });
     const rh = board.hexes[S.robber];
     h += '<g class="robber" transform="translate(' + (rh.x * K - 37) + ',' + (rh.y * K + 4) + ')"><ellipse cx="0" cy="22" rx="14" ry="6"/><path d="M-11 22 Q-12 0 0 -4 Q12 0 11 22 Z"/><circle cx="0" cy="-14" r="9"/></g>';
@@ -3468,6 +3798,7 @@ button, .hit { touch-action: manipulation; }
     trackDelta(); clampDraft();
     if (!pendingDiscardNeed()) ui.discard = {};
     if (!goldNeed()) ui.gold = {};
+    if (fogKey() !== ui.fogKey) renderFog();
     renderPrompt(); renderDice(); renderPlayers(); renderLog(); renderHand(); renderTray(); renderActions(); renderDyn(); renderCaption(); renderModal();
     if (S.phase !== 'gameover') saveGame(); else if (!MP) { try { localStorage.removeItem('is-game'); } catch (e) { /* ignore */ } }
     if (MP && MP.role === 'host' && MP.started) pushState();
@@ -3486,6 +3817,7 @@ button, .hit { touch-action: manipulation; }
       if (e.t === 'award') toast(pname(e.pid) + (e.pid === ME ? ' take' : ' takes') + (e.kind === 'road' ? ' Longest Road' : ' Largest Army') + '!');
       if (e.t === 'steal' && e.from === ME) toast(S.players[e.to].name + ' stole a card from you');
       if (e.t === 'pirate') toast('The pirate sails to a new hex');
+      if (e.t === 'discover') toast(e.terrain === 'sea' ? 'Open sea out in the fog' : e.terrain === 'gold' ? 'Fog lifts: a gold field!' : 'Fog lifts: ' + e.terrain + ' (' + e.num + ')');
     });
   }
   const ENDS_MODE = ['place_road', 'place_ship', 'place_settlement', 'build_city', 'roll', 'end_turn', 'move_robber', 'move_pirate', 'steal', 'move_ship', 'gold_pick'];
