@@ -3940,7 +3940,7 @@ button, .hit { touch-action: manipulation; }
   }
   function mpPersist() {
     try {
-      if (MP && MP.role === 'host' && MP.started) localStorage.setItem('is-mp', JSON.stringify({ role: 'host', code: MP.code, cid: MP.cid, seats: MP.seats, init: MP.init }));
+      if (MP && MP.role === 'host' && MP.started) localStorage.setItem('is-mp', JSON.stringify({ role: 'host', code: MP.code, cid: MP.cid, seats: MP.seats, init: MP.init, t: Date.now() }));
       else if (MP && MP.role === 'guest') localStorage.setItem('is-room', JSON.stringify({ code: MP.code, cid: MP.cid }));
     } catch (e) { /* ignore */ }
   }
@@ -4034,6 +4034,11 @@ button, .hit { touch-action: manipulation; }
     const players = S.players.map(function (p) { return { name: p.name, color: p.color, isBot: p.isBot, diff: p.diff }; });
     launchHost(Object.assign(gameOpts(), { players: players }), MP.seats.slice());
   }
+  /* seats that belonged to other players become bots, so a game never waits on someone who is not there */
+  function botsTakeOver() {
+    if (!S) return;
+    S.players.forEach(function (p, i) { if (i > 0 && !p.isBot) { p.isBot = true; p.name = p.name || 'Bot'; p.diff = settings.diff === 'mixed' ? 'medium' : settings.diff; } });
+  }
   function resumeHost(saved) {
     MP = { role: 'host', code: saved.code, cid: saved.cid, started: true, lobby: { guests: [] }, seen: new Set(), seats: saved.seats, init: saved.init, net: null, room: null };
     const my = MP;
@@ -4041,7 +4046,7 @@ button, .hit { touch-action: manipulation; }
       let room = await openRoom(saved.code, 'host');
       for (let i = 0; i < 4 && !room && lastRoomErr === 'unavailable-id' && MP === my; i++) { await new Promise(function (r) { setTimeout(r, 4000); }); room = await openRoom(saved.code, 'host'); }
       if (MP !== my) return;
-      if (!room) { toast('Could not reopen the room. Playing on your own for now.', true); MP = null; renderAll(); schedule(); return; }
+      if (!room) { toast('Could not reopen the room. Playing on your own for now.', true); MP = null; mpForget(); botsTakeOver(); renderAll(); schedule(); return; }
       my.room = room;
       my.net = NET.connect(room, { role: 'host', cid: my.cid, onHello: hostHello, onAction: hostAction, onError: function () { /* transient */ } });
       my.net.keepAlive(4000);
@@ -4320,7 +4325,8 @@ button, .hit { touch-action: manipulation; }
     Object.keys(S.roadAt).forEach(function (e) { ui.known.add(S.shipAt[e] ? 's' + e : 'r' + e); });
     Object.keys(S.occ).forEach(function (v) { ui.known.add('b' + (S.occ[v].city ? 'c' : 's') + v); });
     buildBoard(); renderAll(); schedule();
-    if (savedMp && savedMp.role === 'host' && savedMp.init) resumeHost(savedMp);
+    if (savedMp && savedMp.role === 'host' && savedMp.init && savedMp.t && Date.now() - savedMp.t < 20 * 60 * 1000) resumeHost(savedMp);
+    else { mpForget(); botsTakeOver(); renderAll(); schedule(); }
   } else newGame();
   clearTimeout(timer); ui.modal = 'menu'; renderModal();
 })();
